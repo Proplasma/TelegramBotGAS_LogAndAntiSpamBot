@@ -1,7 +1,6 @@
 //TelegramBotGAS_LogAndAntiSpamBot
 
 
-
 /**
  * ============================================================
  * PHẦN 1: CẤU HÌNH & SETUP 
@@ -9,7 +8,7 @@
  */
 
 function AutoSetUpBot() {
-  Logger.log("Bắt đầu thiết lập...");
+  Logger.log("Bat dau thiet lap...");
   setupEnvironment();
   setWebhook();
 }
@@ -21,7 +20,7 @@ function setupEnvironment() {
     'WEBAPP_URL': 'YOUR_WEBAPP_URL_HERE',    // <--- Thay URL Web App
     'SHEET_ID': 'YOUR_GOOGLE_SHEET_ID'       // <--- Thay ID Google Sheet
   });
-  Logger.log("Đã lưu cấu hình. Hãy chạy hàm setWebhook.");
+  Logger.log("Da luu cau hinh. Hay chay ham setWebhook.");
 }
 
 /**
@@ -41,7 +40,7 @@ function getConfig() {
 
 function getTelegramUrl() {
   const token = getConfig().token;
-  if (!token) throw new Error("Chưa có Token cấu hình.");
+  if (!token) throw new Error("Chua co Token cau hinh.");
   return "https://api.telegram.org/bot" + token;
 }
 
@@ -66,22 +65,19 @@ function sendText(chatId, text) {
   try {
     UrlFetchApp.fetch(url, options);
   } catch (e) {
-    Logger.log("Lỗi gửi tin: " + e.toString());
+    Logger.log("Loi gui tin: " + e.toString());
   }
 }
 
-// Hàm mới: Hạn chế (Mute) người dùng
 function muteUser(chatId, userId, minutes) {
   const url = getTelegramUrl() + "/restrictChatMember";
-  
-  // Tính toán thời điểm mở khóa (Unix timestamp tính bằng giây)
   const untilDate = Math.floor(Date.now() / 1000) + (minutes * 60);
   
   const payload = {
     chat_id: chatId,
     user_id: userId,
     permissions: {
-      can_send_messages: false // Rút quyền gửi tin nhắn
+      can_send_messages: false
     },
     until_date: untilDate
   };
@@ -90,15 +86,34 @@ function muteUser(chatId, userId, minutes) {
     method: "post",
     contentType: "application/json",
     payload: JSON.stringify(payload),
-    muteHttpExceptions: true // Giúp log được lỗi chi tiết nếu bot thiếu quyền
+    muteHttpExceptions: true
   };
   
   try {
     const response = UrlFetchApp.fetch(url, options);
-    Logger.log("Kết quả Mute: " + response.getContentText());
+    Logger.log("Ket qua Mute: " + response.getContentText());
   } catch (e) {
-    Logger.log("Lỗi gọi API Mute: " + e.toString());
+    Logger.log("Loi goi API Mute: " + e.toString());
   }
+}
+
+// Hàm lấy URL tải file trực tiếp từ Telegram
+function getFileUrl(fileId) {
+  const config = getConfig();
+  const url = "https://api.telegram.org/bot" + config.token + "/getFile?file_id=" + fileId;
+  
+  try {
+    const response = UrlFetchApp.fetch(url);
+    const data = JSON.parse(response.getContentText());
+    
+    if (data.ok && data.result) {
+      const filePath = data.result.file_path;
+      return "https://api.telegram.org/file/bot" + config.token + "/" + filePath;
+    }
+  } catch (e) {
+    Logger.log("Loi khi lay duong dan file: " + e.toString());
+  }
+  return "Khong the lay link";
 }
 
 /**
@@ -108,7 +123,7 @@ function muteUser(chatId, userId, minutes) {
  */
 
 function doGet(e) {
-  return HtmlService.createHtmlOutput("Hệ thống Bot Quản lý Nhóm đang hoạt động.");
+  return HtmlService.createHtmlOutput("He thong Bot Quan ly Nhom dang hoat dong.");
 }
 
 function doPost(e) {
@@ -121,13 +136,42 @@ function doPost(e) {
 
     const msg = data.message;
     const chatId = msg.chat.id;
-    const chatType = msg.chat.type; // Xác định loại chat: private, group, supergroup
+    const chatType = msg.chat.type;
     const userId = msg.from.id;
-    const text = msg.text || "[Không phải văn bản/Sticker/Ảnh]";
     const fullName = (msg.from.first_name + " " + (msg.from.last_name || "")).trim();
 
     // ==========================================
-    // MODULE 1: GIÁM SÁT SPAM (Chỉ chạy trong nhóm)
+    // MODULE 1: PHÂN LOẠI VÀ LẤY DỮ LIỆU TIN NHẮN
+    // ==========================================
+    let textContent = "";
+    
+    if (msg.text) {
+      textContent = msg.text; 
+    } else if (msg.photo) {
+      const highestResPhoto = msg.photo[msg.photo.length - 1];
+      const fileUrl = getFileUrl(highestResPhoto.file_id);
+      const caption = msg.caption ? " | Chu thich: " + msg.caption : "";
+      textContent = "[Hinh anh] Link: " + fileUrl + caption;
+    } else if (msg.document) {
+      // Áp dụng lấy link cho cả tài liệu (PDF, Word, Excel...)
+      const fileUrl = getFileUrl(msg.document.file_id);
+      textContent = "[Tai lieu: " + (msg.document.file_name || "Khong ten") + "] Link: " + fileUrl;
+    } else if (msg.video) {
+      // Áp dụng lấy link cho video
+      const fileUrl = getFileUrl(msg.video.file_id);
+      const caption = msg.caption ? " | Chu thich: " + msg.caption : "";
+      textContent = "[Video] Link: " + fileUrl + caption;
+    } else if (msg.sticker) {
+      textContent = "[Sticker] " + (msg.sticker.emoji || "");
+    } else if (msg.voice) {
+      const fileUrl = getFileUrl(msg.voice.file_id);
+      textContent = "[Tin nhan thoai] Link: " + fileUrl;
+    } else {
+      textContent = "[Dinh dang khac khong xac dinh]";
+    }
+
+    // ==========================================
+    // MODULE 2: GIÁM SÁT SPAM (Chỉ chạy trong nhóm)
     // ==========================================
     if (chatType === "group" || chatType === "supergroup") {
       const cache = CacheService.getScriptCache();
@@ -135,44 +179,40 @@ function doPost(e) {
       let count = cache.get(cacheKey);
 
       if (count == null) {
-        // Nếu chưa có dữ liệu, khởi tạo biến đếm là 1, tồn tại trong 60 giây
         cache.put(cacheKey, "1", 60);
       } else {
         count = parseInt(count) + 1;
-        cache.put(cacheKey, count.toString(), 60); // Cập nhật lại số đếm
+        cache.put(cacheKey, count.toString(), 60);
 
-        // Nếu chạm mốc 11 tin nhắn (vượt quá 10)
         if (count === 11) {
-          muteUser(chatId, userId, 10); // Mute 10 phút
-          sendText(chatId, "⚠️ Cảnh báo: Người dùng " + fullName + " đã bị cấm chat 10 phút do gửi tin nhắn quá nhanh.");
-          return; // Kết thúc luồng, không log tin nhắn vi phạm này vào Sheet
+          muteUser(chatId, userId, 10);
+          sendText(chatId, "Canh bao: Nguoi dung " + fullName + " da bi cam chat 10 phut do gui tin nhan qua nhanh.");
+          return;
         } else if (count > 11) {
-          return; // Đã xử lý Mute, chặn việc log các tin nhắn dồn dập tiếp theo
+          return; 
         }
       }
     }
 
     // ==========================================
-    // MODULE 2: GHI NHẬT KÝ VÀO GOOGLE SHEETS
+    // MODULE 3: GHI NHẬT KÝ VÀO GOOGLE SHEETS
     // ==========================================
     const lock = LockService.getScriptLock();
     try {
-      // Chờ tối đa 3 giây để lấy quyền ghi, tránh xung đột khi nhiều người nhắn cùng lúc
       if (lock.tryLock(3000)) {
         const ss = SpreadsheetApp.openById(config.ssId);
         const sheet = ss.getSheets()[0];
-        sheet.appendRow([new Date(), chatId, userId, fullName, text]);
+        sheet.appendRow([new Date(), chatId, userId, fullName, textContent]);
       } else {
-        Logger.log("Timeout: Không thể lấy quyền LockService cho tin nhắn của " + userId);
+        Logger.log("Timeout LockService cho user: " + userId);
       }
     } catch (err) {
-      Logger.log("Lỗi ghi Sheet: " + err.message);
+      Logger.log("Loi ghi Sheet: " + err.message);
     } finally {
-      // Bắt buộc phải giải phóng khóa
       lock.releaseLock();
     }
 
   } catch (e) {
-    Logger.log("LỖI NGHIÊM TRỌNG: " + e.toString());
+    Logger.log("LOI NGHIEM TRONG: " + e.toString());
   }
 }
